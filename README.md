@@ -8,7 +8,7 @@ Built with Bun + TypeScript + SQLite. Runs on a Hetzner VPS via systemd timer at
 ## Architecture
 
 ```
-07:30 Europe/Madrid (systemd timer)
+17:30 Europe/Madrid (systemd timer)
     │
     ▼
 fetch unread TLDR emails from last 24h (Gmail API)
@@ -116,6 +116,40 @@ journalctl -u tldr-recap.service -f
 
 # check the timer schedule
 systemctl list-timers tldr-recap.timer
+```
+
+## Checking execution
+
+```bash
+# See logs from the last run
+journalctl -u tldr-recap.service --since "today" --no-pager
+
+# Follow logs in real time (useful during a manual run)
+journalctl -u tldr-recap.service -f
+
+# Check when the next run is scheduled
+systemctl list-timers tldr-recap.timer
+
+# Trigger a manual run immediately
+sudo systemctl start tldr-recap.service
+```
+
+## Changing the run time
+
+Edit `systemd/tldr-recap.timer`:
+
+```ini
+[Timer]
+OnCalendar=*-*-* 17:30:00 Europe/Madrid
+```
+
+Change `17:30:00` to whatever time you want (in `Europe/Madrid` local time). Then deploy to the server:
+
+```bash
+sudo cp systemd/tldr-recap.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart tldr-recap.timer
+systemctl list-timers tldr-recap.timer  # verify next run
 ```
 
 ## Tuning over time
