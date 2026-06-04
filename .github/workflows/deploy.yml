@@ -1,0 +1,22 @@
+name: Deploy to Hetzner
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        env:
+          SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+          HOST: ${{ secrets.HETZNER_HOST }}
+        run: |
+          echo "$SSH_KEY" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          ssh -i /tmp/deploy_key \
+            -o StrictHostKeyChecking=no \
+            -o BatchMode=yes \
+            marco@$HOST \
+            "cd /opt/tldr-recap && git pull origin main && bun install --frozen-lockfile --ignore-scripts"
+          rm -f /tmp/deploy_key
