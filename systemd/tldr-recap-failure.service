@@ -1,0 +1,10 @@
+[Unit]
+Description=Notification when tldr-recap fails outside of caught exceptions
+# This handles the rare case where the Bun process crashes BEFORE it can
+# send its own error email (e.g. config validation failure, OOM, etc.)
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/tldr-recap
+ExecStart=/bin/sh -c 'echo "tldr-recap.service crashed without sending its own error email. Check journalctl -u tldr-recap.service for details." | logger -t tldr-recap-failure'

@@ -1,0 +1,19 @@
+{
+  "name": "tldr-recap",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "bootstrap-gmail": "bun run scripts/bootstrap-gmail-auth.ts"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0",
+    "node-html-parser": "^6.1.13"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.5.0"
+  }
+}

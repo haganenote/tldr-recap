@@ -1,0 +1,139 @@
+// src/summarize.ts
+// Calls OpenRouter in batches of 50 items to avoid context/timeout limits.
+// Uses fetch directly (no SDK) so swapping models is a one-env-var change.
+
+import { config } from "./config";
+import type { CleanItem } from "./filter";
+
+export interface CategorizedItem {
+  /** One of the canonical categories below. */
+  category: Category;
+  /** Original headline, possibly cleaned up. */
+  headline: string;
+  /** One-sentence summary in clean English, no marketing tone. */
+  summary: string;
+  /** Original URL (preserved through the LLM round-trip). */
+  url: string;
+}
+
+export const CATEGORIES = [
+  "AI & Machine Learning",
+  "Big Tech & Startups",
+  "Programming & Infrastructure",
+  "Science & Research",
+  "Miscellaneous",
+] as const;
+export type Category = (typeof CATEGORIES)[number];
+
+const SYSTEM_PROMPT = `You are a careful editor producing a daily tech-news recap.
+
+Given a JSON array of news items (each with id, headline, raw_summary, url, source_section), produce a JSON object with the same items grouped into exactly these categories:
+
+${CATEGORIES.map((c) => `- "${c}"`).join("\n")}
+
+For each item:
+- Pick the single best category from the list above. Use "Miscellaneous" only when the item genuinely fits nowhere else.
+- Write a clean one-sentence summary (max ~25 words). Neutral tone, no hype, no marketing copy. State what happened or what was found, not why it's "exciting".
+- Preserve the url EXACTLY as given. Do not modify it.
+- Preserve the id EXACTLY as given.
+
+Output JSON only, no markdown fences, with this shape:
+
+{
+  "items": [
+    { "id": "...", "category": "...", "headline": "...", "summary": "...", "url": "..." }
+  ]
+}
+
+Do not invent items. Do not drop items. The output array must have the same length as the input array.`;
+
+const BATCH_SIZE = 50;
+const TIMEOUT_MS = 90_000;
+
+async function callOpenRouter(
+  batchItems: Array<{ id: string; headline: string; raw_summary: string; url: string; source_section: string }>,
+): Promise<Array<Partial<CategorizedItem> & { id?: string }>> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.openrouter.apiKey}`,
+        "HTTP-Referer": "https://github.com/tldr-recap",
+        "X-Title": "tldr-recap",
+      },
+      body: JSON.stringify({
+        model: config.openrouter.model,
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: JSON.stringify({ items: batchItems }) },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.2,
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`OpenRouter HTTP ${response.status}: ${text.slice(0, 500)}`);
+  }
+
+  const json = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = json.choices?.[0]?.message?.content;
+  if (!content) throw new Error("OpenRouter returned no content");
+
+  let parsed: { items?: Array<Partial<CategorizedItem> & { id?: string }> };
+  try {
+    const stripped = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+    parsed = JSON.parse(stripped);
+  } catch {
+    throw new Error(`OpenRouter returned non-JSON: ${content.slice(0, 300)}`);
+  }
+
+  return parsed.items ?? [];
+}
+
+export async function summarizeAndCategorize(
+  items: CleanItem[],
+): Promise<CategorizedItem[]> {
+  if (items.length === 0) return [];
+
+  const llmInput = items.map((it, idx) => ({
+    id: `item-${idx}`,
+    headline: it.headline,
+    raw_summary: it.summary.slice(0, 600),
+    url: it.canonicalUrl,
+    source_section: it.section,
+  }));
+
+  const out: CategorizedItem[] = [];
+  for (let i = 0; i < llmInput.length; i += BATCH_SIZE) {
+    const batch = llmInput.slice(i, i + BATCH_SIZE);
+    console.log(`[${new Date().toISOString()}] summarizing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(llmInput.length / BATCH_SIZE)} (${batch.length} items)`);
+    const rawItems = await callOpenRouter(batch);
+    for (const raw of rawItems) {
+      if (!raw.headline || !raw.summary || !raw.url || !raw.category) continue;
+      if (!CATEGORIES.includes(raw.category as Category)) {
+        raw.category = "Miscellaneous";
+      }
+      out.push({
+        headline: raw.headline,
+        summary: raw.summary,
+        url: raw.url,
+        category: raw.category as Category,
+      });
+    }
+  }
+
+  return out;
+}

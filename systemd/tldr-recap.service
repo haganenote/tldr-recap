@@ -1,0 +1,23 @@
+[Unit]
+Description=TLDR daily recap job
+After=network-online.target
+Wants=network-online.target
+OnFailure=tldr-recap-failure.service
+
+[Service]
+Type=oneshot
+User=marco
+Group=marco
+WorkingDirectory=/opt/tldr-recap
+EnvironmentFile=/opt/tldr-recap/.env
+ExecStart=/home/marco/.bun/bin/bun run src/index.ts
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=300
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/tldr-recap/data
+PrivateTmp=true

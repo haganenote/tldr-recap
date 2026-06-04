@@ -1,0 +1,11 @@
+[Unit]
+Description=Run tldr-recap daily at 17:30 Europe/Madrid
+
+[Timer]
+OnCalendar=*-*-* 17:30:00 Europe/Madrid
+Persistent=true
+RandomizedDelaySec=2min
+Unit=tldr-recap.service
+
+[Install]
+WantedBy=timers.target
