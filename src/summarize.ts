@@ -48,17 +48,22 @@ Output JSON only, no markdown fences, with this shape:
 Do not invent items. Do not drop items. The output array must have the same length as the input array.`;
 
 const BATCH_SIZE = 50;
-const TIMEOUT_MS = 90_000;
+const TIMEOUT_MS = 120_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`OpenRouter batch timed out after ${ms / 1000}s`)), ms),
+    ),
+  ]);
+}
 
 async function callOpenRouter(
   batchItems: Array<{ id: string; headline: string; raw_summary: string; url: string; source_section: string }>,
 ): Promise<Array<Partial<CategorizedItem> & { id?: string }>> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
-  let response: Response;
-  try {
-    response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+  const fetchAndParse = async () => {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -75,32 +80,31 @@ async function callOpenRouter(
         response_format: { type: "json_object" },
         temperature: 0.2,
       }),
-      signal: controller.signal,
     });
-  } finally {
-    clearTimeout(timer);
-  }
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`OpenRouter HTTP ${response.status}: ${text.slice(0, 500)}`);
-  }
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`OpenRouter HTTP ${response.status}: ${text.slice(0, 500)}`);
+    }
 
-  const json = (await response.json()) as {
-    choices?: Array<{ message?: { content?: string } }>;
+    const json = (await response.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const content = json.choices?.[0]?.message?.content;
+    if (!content) throw new Error("OpenRouter returned no content");
+
+    let parsed: { items?: Array<Partial<CategorizedItem> & { id?: string }> };
+    try {
+      const stripped = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+      parsed = JSON.parse(stripped);
+    } catch {
+      throw new Error(`OpenRouter returned non-JSON: ${content.slice(0, 300)}`);
+    }
+
+    return parsed.items ?? [];
   };
-  const content = json.choices?.[0]?.message?.content;
-  if (!content) throw new Error("OpenRouter returned no content");
 
-  let parsed: { items?: Array<Partial<CategorizedItem> & { id?: string }> };
-  try {
-    const stripped = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-    parsed = JSON.parse(stripped);
-  } catch {
-    throw new Error(`OpenRouter returned non-JSON: ${content.slice(0, 300)}`);
-  }
-
-  return parsed.items ?? [];
+  return withTimeout(fetchAndParse(), TIMEOUT_MS);
 }
 
 export async function summarizeAndCategorize(
@@ -119,7 +123,10 @@ export async function summarizeAndCategorize(
   const out: CategorizedItem[] = [];
   for (let i = 0; i < llmInput.length; i += BATCH_SIZE) {
     const batch = llmInput.slice(i, i + BATCH_SIZE);
-    console.log(`[${new Date().toISOString()}] summarizing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(llmInput.length / BATCH_SIZE)} (${batch.length} items)`);
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    const totalBatches = Math.ceil(llmInput.length / BATCH_SIZE);
+    console.log(`[${new Date().toISOString()}] summarizing batch ${batchNum}/${totalBatches} (${batch.length} items)`);
+    if (i > 0) await new Promise((r) => setTimeout(r, 10_000)); // 10s between batches to avoid rate limits
     const rawItems = await callOpenRouter(batch);
     for (const raw of rawItems) {
       if (!raw.headline || !raw.summary || !raw.url || !raw.category) continue;
