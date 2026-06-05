@@ -14,6 +14,11 @@ export interface CategorizedItem {
   summary: string;
   /** Original URL (preserved through the LLM round-trip). */
   url: string;
+  /**
+   * Career relevance score for a mid-level full-stack/AI engineer aiming for
+   * senior/lead/manager: 3 = high, 2 = medium, 1 = low.
+   */
+  relevance: 1 | 2 | 3;
 }
 
 export const CATEGORIES = [
@@ -25,15 +30,25 @@ export const CATEGORIES = [
 ] as const;
 export type Category = (typeof CATEGORIES)[number];
 
-const SYSTEM_PROMPT = `You are a careful editor producing a daily tech-news recap.
+const SYSTEM_PROMPT = `You are a careful editor producing a daily tech-news recap for a specific reader.
 
-Given a JSON array of news items (each with id, headline, raw_summary, url, source_section), produce a JSON object with the same items grouped into exactly these categories:
+Reader profile:
+- Mid-level full-stack software engineer, 46 years old, aiming for senior/lead/manager
+- Works at a large travel company (FCTG)
+- Daily stack: Kubernetes, TypeScript, JavaScript, Ruby on Rails, Python, AI integration, LLM orchestration, backend services, message queues, frontend
+- Career goal: stay ahead of AI trends, build technical leadership credibility, grow into senior/lead/manager roles
 
-${CATEGORIES.map((c) => `- "${c}"`).join("\n")}
+Given a JSON array of news items (each with id, headline, raw_summary, url, source_section), produce a JSON object with the same items.
 
 For each item:
-- Pick the single best category from the list above. Use "Miscellaneous" only when the item genuinely fits nowhere else.
-- Write a clean one-sentence summary (max ~25 words). Neutral tone, no hype, no marketing copy. State what happened or what was found, not why it's "exciting".
+- Pick the single best category from this list:
+${CATEGORIES.map((c) => `  - "${c}"`).join("\n")}
+  Use "Miscellaneous" only when the item genuinely fits nowhere else.
+- Write a clean one-sentence summary (max ~25 words). Neutral tone, no hype, no marketing copy. State what happened or what was found.
+- Assign a career relevance score (integer 1-3) based on how useful this item is for the reader's career advancement:
+  - 3 (high): AI/LLM advances, agent frameworks, k8s/cloud patterns, software architecture, engineering leadership, TS/JS/Python/RoR ecosystem, backend/queue patterns, travel-tech, management skills, product thinking, general engineering culture
+  - 2 (medium): frontend trends, DevOps, security, startup ecosystem in tech
+  - 1 (low): crypto/DeFi, consumer gadgets, marketing analytics, pure science, finance, sports, unrelated industries
 - Preserve the url EXACTLY as given. Do not modify it.
 - Preserve the id EXACTLY as given.
 
@@ -41,7 +56,7 @@ Output JSON only, no markdown fences, with this shape:
 
 {
   "items": [
-    { "id": "...", "category": "...", "headline": "...", "summary": "...", "url": "..." }
+    { "id": "...", "category": "...", "headline": "...", "summary": "...", "url": "...", "relevance": 3 }
   ]
 }
 
@@ -133,11 +148,15 @@ export async function summarizeAndCategorize(
       if (!CATEGORIES.includes(raw.category as Category)) {
         raw.category = "Miscellaneous";
       }
+      const relevance = [1, 2, 3].includes(raw.relevance as number)
+        ? (raw.relevance as 1 | 2 | 3)
+        : 2;
       out.push({
         headline: raw.headline,
         summary: raw.summary,
         url: raw.url,
         category: raw.category as Category,
+        relevance,
       });
     }
   }

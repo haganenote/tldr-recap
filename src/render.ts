@@ -21,15 +21,15 @@ export function renderRecapHtml(opts: RenderOpts): string {
     day: "numeric",
   });
 
-  const grouped = new Map<string, CategorizedItem[]>();
-  for (const cat of CATEGORIES) grouped.set(cat, []);
-  for (const item of items) {
-    grouped.get(item.category)!.push(item);
-  }
+  const high = items.filter((i) => i.relevance === 3).sort(byCategoryThenHeadline);
+  const mid = items.filter((i) => i.relevance === 2).sort(byCategoryThenHeadline);
+  const low = items.filter((i) => i.relevance === 1).sort(byCategoryThenHeadline);
 
-  const sections = CATEGORIES.filter((cat) => grouped.get(cat)!.length > 0)
-    .map((cat) => renderSection(cat, grouped.get(cat)!))
-    .join("\n");
+  const sections = [
+    renderTier("Must read", high, "relevance-high"),
+    mid.length > 0 ? `<hr class="tier-divider"><p class="tier-label">Worth a glance</p>${renderItemList(mid, "relevance-mid")}` : "",
+    low.length > 0 ? `<hr class="tier-divider"><p class="tier-label">Low priority</p>${renderItemList(low, "relevance-low")}` : "",
+  ].join("\n");
 
   const editionsLine =
     editions.length > 0
@@ -96,6 +96,21 @@ export function renderRecapHtml(opts: RenderOpts): string {
     font-size: 14px;
     margin: 0;
   }
+  .relevance-high { border-left: 3px solid #22c55e; padding-left: 10px; }
+  .relevance-mid { border-left: 3px solid #f59e0b; padding-left: 10px; opacity: 0.85; }
+  .relevance-low { border-left: 3px solid #e5e5e5; padding-left: 10px; opacity: 0.6; }
+  .tier-divider {
+    border: none;
+    border-top: 1px dashed var(--border);
+    margin: 24px 0 8px;
+  }
+  .tier-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
   footer {
     margin-top: 40px;
     padding-top: 16px;
@@ -134,23 +149,24 @@ export function renderRecapHtml(opts: RenderOpts): string {
 </html>`;
 }
 
-function renderSection(name: string, items: CategorizedItem[]): string {
-  const rendered = items
-    .map(
-      (item) => `
-    <div class="item">
+function renderTier(label: string, items: CategorizedItem[], cls: string): string {
+  if (items.length === 0) return "";
+  return `<p class="tier-label">${escapeHtml(label)}</p>${renderItemList(items, cls)}`;
+}
+
+function renderItemList(items: CategorizedItem[], cls: string): string {
+  return items.map((item) => `
+    <div class="item ${cls}">
       <div class="item-headline">
         <a href="${escapeHtml(item.url)}">${escapeHtml(item.headline)}</a>
+        <span style="font-size:11px;color:var(--muted);font-weight:400;margin-left:6px;">${escapeHtml(item.category)}</span>
       </div>
       <p class="item-summary">${escapeHtml(item.summary)}</p>
-    </div>`,
-    )
-    .join("\n");
+    </div>`).join("\n");
+}
 
-  return `<section>
-  <h2>${escapeHtml(name)}</h2>
-  ${rendered}
-</section>`;
+function byCategoryThenHeadline(a: CategorizedItem, b: CategorizedItem): number {
+  return a.category.localeCompare(b.category) || a.headline.localeCompare(b.headline);
 }
 
 export function renderErrorEmail(error: Error, context: string): string {
