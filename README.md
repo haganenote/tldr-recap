@@ -118,6 +118,24 @@ journalctl -u tldr-recap.service -f
 systemctl list-timers tldr-recap.timer
 ```
 
+## Live database access (SSHFS)
+
+To browse the SQLite database live from your laptop using DBeaver or any local SQLite tool:
+
+```bash
+# Install SSHFS (once)
+sudo apt install sshfs
+
+# Mount the remote data folder
+mkdir -p ~/mnt/tldr-recap
+sshfs user@your-server:/opt/tldr-recap/data ~/mnt/tldr-recap -o IdentityFile=~/.ssh/id_ed25519
+
+# Unmount when done
+fusermount -u ~/mnt/tldr-recap
+```
+
+Then connect DBeaver to: **New Connection → SQLite → `~/mnt/tldr-recap/state.db`**
+
 ## Checking execution
 
 ```bash
