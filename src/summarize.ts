@@ -65,21 +65,16 @@ Do not invent items. Do not drop items. The output array must have the same leng
 const BATCH_SIZE = 50;
 const TIMEOUT_MS = 120_000;
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`OpenRouter batch timed out after ${ms / 1000}s`)), ms),
-    ),
-  ]);
-}
-
 async function callOpenRouter(
   batchItems: Array<{ id: string; headline: string; raw_summary: string; url: string; source_section: string }>,
 ): Promise<Array<Partial<CategorizedItem> & { id?: string }>> {
-  const fetchAndParse = async () => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(new Error(`OpenRouter batch timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS);
+
+  try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
+      signal: controller.signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.openrouter.apiKey}`,
@@ -117,9 +112,9 @@ async function callOpenRouter(
     }
 
     return parsed.items ?? [];
-  };
-
-  return withTimeout(fetchAndParse(), TIMEOUT_MS);
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function summarizeAndCategorize(
