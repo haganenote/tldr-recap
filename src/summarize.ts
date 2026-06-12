@@ -62,7 +62,7 @@ Output JSON only, no markdown fences, with this shape:
 
 Do not invent items. Do not drop items. The output array must have the same length as the input array.`;
 
-const BATCH_SIZE = 50;
+const BATCH_SIZE = 25;
 const TIMEOUT_MS = 120_000;
 
 async function callOpenRouter(
@@ -89,6 +89,7 @@ async function callOpenRouter(
         ],
         response_format: { type: "json_object" },
         temperature: 0.2,
+        max_tokens: 8192,
       }),
     });
 

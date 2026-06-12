@@ -132,6 +132,14 @@ function log(msg: string): void {
 }
 
 // ---- Run ----
+// Hard backstop: Bun's fetch can hang indefinitely even with AbortController.
+// 15 minutes covers worst-case 6 batches × 2 min + gaps, with room to spare.
+const hardDeadline = setTimeout(() => {
+  log("FATAL: hard 15-minute deadline exceeded — force exiting");
+  process.exit(2);
+}, 15 * 60 * 1000);
+hardDeadline.unref();
+
 try {
   await main();
   log("done");
