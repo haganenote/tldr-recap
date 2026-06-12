@@ -111,10 +111,17 @@ async function callOpenRouter(
 
     let parsed: { items?: Array<Partial<CategorizedItem> & { id?: string }> };
     try {
-      const stripped = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-      parsed = JSON.parse(stripped);
-    } catch {
-      throw new Error(`OpenRouter returned non-JSON (finish_reason=${finishReason}): ${content.slice(0, 300)}`);
+      // Extract JSON by finding the outermost { ... } regardless of markdown wrapping
+      const trimmed = content.trim();
+      const start = trimmed.indexOf("{");
+      const end = trimmed.lastIndexOf("}");
+      if (start === -1 || end === -1) throw new SyntaxError("no JSON object found");
+      parsed = JSON.parse(trimmed.slice(start, end + 1));
+    } catch (parseErr) {
+      throw new Error(
+        `OpenRouter returned non-JSON (finish_reason=${finishReason}, parse=${(parseErr as Error).message}): ` +
+        `START=${content.slice(0, 200)} … END=${content.slice(-200)}`
+      );
     }
 
     return parsed.items ?? [];
