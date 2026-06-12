@@ -87,7 +87,6 @@ async function callOpenRouter(
           { role: "system", content: SYSTEM_PROMPT },
           { role: "user", content: JSON.stringify({ items: batchItems }) },
         ],
-        response_format: { type: "json_object" },
         temperature: 0.2,
         max_tokens: 8192,
       }),
@@ -99,17 +98,23 @@ async function callOpenRouter(
     }
 
     const json = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
     };
-    const content = json.choices?.[0]?.message?.content;
+    const choice = json.choices?.[0];
+    const content = choice?.message?.content;
     if (!content) throw new Error("OpenRouter returned no content");
+
+    const finishReason = choice?.finish_reason ?? "unknown";
+    if (finishReason === "length") {
+      throw new Error(`OpenRouter truncated output (finish_reason=length) — batch too large or max_tokens too low`);
+    }
 
     let parsed: { items?: Array<Partial<CategorizedItem> & { id?: string }> };
     try {
       const stripped = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
       parsed = JSON.parse(stripped);
     } catch {
-      throw new Error(`OpenRouter returned non-JSON: ${content.slice(0, 300)}`);
+      throw new Error(`OpenRouter returned non-JSON (finish_reason=${finishReason}): ${content.slice(0, 300)}`);
     }
 
     return parsed.items ?? [];
@@ -138,7 +143,14 @@ export async function summarizeAndCategorize(
     const totalBatches = Math.ceil(llmInput.length / BATCH_SIZE);
     console.log(`[${new Date().toISOString()}] summarizing batch ${batchNum}/${totalBatches} (${batch.length} items)`);
     if (i > 0) await new Promise((r) => setTimeout(r, 10_000)); // 10s between batches to avoid rate limits
-    const rawItems = await callOpenRouter(batch);
+    let rawItems: Awaited<ReturnType<typeof callOpenRouter>>;
+    try {
+      rawItems = await callOpenRouter(batch);
+    } catch (e) {
+      console.log(`[${new Date().toISOString()}] batch ${batchNum} failed (${(e as Error).message}), retrying in 15s…`);
+      await new Promise((r) => setTimeout(r, 15_000));
+      rawItems = await callOpenRouter(batch); // let second failure propagate
+    }
     for (const raw of rawItems) {
       if (!raw.headline || !raw.summary || !raw.url || !raw.category) continue;
       if (!CATEGORIES.includes(raw.category as Category)) {
