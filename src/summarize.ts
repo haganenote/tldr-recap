@@ -2,6 +2,7 @@
 // Calls OpenRouter in batches of 50 items to avoid context/timeout limits.
 // Uses fetch directly (no SDK) so swapping models is a one-env-var change.
 
+import { jsonrepair } from "jsonrepair";
 import { config } from "./config";
 import type { CleanItem } from "./filter";
 
@@ -111,12 +112,11 @@ async function callOpenRouter(
 
     let parsed: { items?: Array<Partial<CategorizedItem> & { id?: string }> };
     try {
-      // Extract JSON by finding the outermost { ... } regardless of markdown wrapping
       const trimmed = content.trim();
       const start = trimmed.indexOf("{");
       const end = trimmed.lastIndexOf("}");
       if (start === -1 || end === -1) throw new SyntaxError("no JSON object found");
-      parsed = JSON.parse(trimmed.slice(start, end + 1));
+      parsed = JSON.parse(jsonrepair(trimmed.slice(start, end + 1)));
     } catch (parseErr) {
       throw new Error(
         `OpenRouter returned non-JSON (finish_reason=${finishReason}, parse=${(parseErr as Error).message}): ` +
