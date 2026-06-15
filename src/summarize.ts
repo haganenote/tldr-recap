@@ -1,7 +1,7 @@
 // src/summarize.ts
-// Calls OpenRouter in batches of 50 items to avoid context/timeout limits.
-// Uses fetch directly (no SDK) so swapping models is a one-env-var change.
+// Calls OpenRouter in batches of 25 items.
 
+import https from "node:https";
 import { jsonrepair } from "jsonrepair";
 import { config } from "./config";
 import type { CleanItem } from "./filter";
@@ -66,68 +66,86 @@ Do not invent items. Do not drop items. The output array must have the same leng
 const BATCH_SIZE = 25;
 const TIMEOUT_MS = 120_000;
 
+function httpsPost(url: string, headers: Record<string, string>, body: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request(
+      { hostname: u.hostname, path: u.pathname, method: "POST", headers },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        res.on("error", reject);
+      },
+    );
+    // Socket-level timeout: fires at the OS level regardless of JS event loop state.
+    req.setTimeout(TIMEOUT_MS, () => req.destroy(new Error(`OpenRouter request timed out after ${TIMEOUT_MS / 1000}s`)));
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
 async function callOpenRouter(
   batchItems: Array<{ id: string; headline: string; raw_summary: string; url: string; source_section: string }>,
 ): Promise<Array<Partial<CategorizedItem> & { id?: string }>> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(new Error(`OpenRouter batch timed out after ${TIMEOUT_MS / 1000}s`)), TIMEOUT_MS);
+  const body = JSON.stringify({
+    model: config.openrouter.model,
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: JSON.stringify({ items: batchItems }) },
+    ],
+    temperature: 0.2,
+    max_tokens: 8192,
+  });
 
+  const rawText = await httpsPost(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      "Content-Type": "application/json",
+      "Content-Length": String(Buffer.byteLength(body)),
+      Authorization: `Bearer ${config.openrouter.apiKey}`,
+      "HTTP-Referer": "https://github.com/tldr-recap",
+      "X-Title": "tldr-recap",
+    },
+    body,
+  );
+
+  let envelope: { choices?: Array<{ message?: { content?: string }; finish_reason?: string }> };
   try {
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.openrouter.apiKey}`,
-        "HTTP-Referer": "https://github.com/tldr-recap",
-        "X-Title": "tldr-recap",
-      },
-      body: JSON.stringify({
-        model: config.openrouter.model,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: JSON.stringify({ items: batchItems }) },
-        ],
-        temperature: 0.2,
-        max_tokens: 8192,
-      }),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`OpenRouter HTTP ${response.status}: ${text.slice(0, 500)}`);
-    }
-
-    const json = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string }; finish_reason?: string }>;
-    };
-    const choice = json.choices?.[0];
-    const content = choice?.message?.content;
-    if (!content) throw new Error("OpenRouter returned no content");
-
-    const finishReason = choice?.finish_reason ?? "unknown";
-    if (finishReason === "length") {
-      throw new Error(`OpenRouter truncated output (finish_reason=length) — batch too large or max_tokens too low`);
-    }
-
-    let parsed: { items?: Array<Partial<CategorizedItem> & { id?: string }> };
-    try {
-      const trimmed = content.trim();
-      const start = trimmed.indexOf("{");
-      const end = trimmed.lastIndexOf("}");
-      if (start === -1 || end === -1) throw new SyntaxError("no JSON object found");
-      parsed = JSON.parse(jsonrepair(trimmed.slice(start, end + 1)));
-    } catch (parseErr) {
-      throw new Error(
-        `OpenRouter returned non-JSON (finish_reason=${finishReason}, parse=${(parseErr as Error).message}): ` +
-        `START=${content.slice(0, 200)} … END=${content.slice(-200)}`
-      );
-    }
-
-    return parsed.items ?? [];
-  } finally {
-    clearTimeout(timeoutId);
+    envelope = JSON.parse(rawText);
+  } catch {
+    throw new Error(`OpenRouter response not JSON: ${rawText.slice(0, 300)}`);
   }
+
+  if (!envelope.choices?.length) {
+    throw new Error(`OpenRouter returned no choices: ${rawText.slice(0, 300)}`);
+  }
+
+  const choice = envelope.choices[0];
+  const content = choice?.message?.content;
+  if (!content) throw new Error("OpenRouter returned no content");
+
+  const finishReason = choice?.finish_reason ?? "unknown";
+  if (finishReason === "length") {
+    throw new Error(`OpenRouter truncated output (finish_reason=length)`);
+  }
+
+  let parsed: { items?: Array<Partial<CategorizedItem> & { id?: string }> };
+  try {
+    const trimmed = content.trim();
+    const start = trimmed.indexOf("{");
+    const end = trimmed.lastIndexOf("}");
+    if (start === -1 || end === -1) throw new SyntaxError("no JSON object found");
+    parsed = JSON.parse(jsonrepair(trimmed.slice(start, end + 1)));
+  } catch (parseErr) {
+    throw new Error(
+      `OpenRouter returned non-JSON (finish_reason=${finishReason}, parse=${(parseErr as Error).message}): ` +
+      `START=${content.slice(0, 200)} … END=${content.slice(-200)}`,
+    );
+  }
+
+  return parsed.items ?? [];
 }
 
 export async function summarizeAndCategorize(
