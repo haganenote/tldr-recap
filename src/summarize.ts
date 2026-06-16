@@ -63,7 +63,7 @@ Output JSON only, no markdown fences, with this shape:
 
 Do not invent items. Do not drop items. The output array must have the same length as the input array.`;
 
-const BATCH_SIZE = 25;
+const BATCH_SIZE = 75;
 const TIMEOUT_MS = 120_000;
 
 function httpsPost(url: string, headers: Record<string, string>, body: string): Promise<string> {
@@ -96,7 +96,7 @@ async function callOpenRouter(
       { role: "user", content: JSON.stringify({ items: batchItems }) },
     ],
     temperature: 0.2,
-    max_tokens: 8192,
+    max_tokens: 16384,
   });
 
   const rawText = await httpsPost(
