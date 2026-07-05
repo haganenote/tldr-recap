@@ -22,7 +22,8 @@ async function main(): Promise<void> {
   pruneOldEntries();
 
   // 1. Fetch
-  const messages = await fetchRecentRawMessages();
+  if (config.force) log("--force: ignoring is:unread / newer_than:1d");
+  const messages = await fetchRecentRawMessages({ force: config.force });
   log(`fetched ${messages.length} raw messages`);
 
   if (messages.length === 0) {

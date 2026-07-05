@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",
+    "start:force": "bun run src/index.ts --force",
     "test": "bun test",
     "bootstrap-gmail": "bun run scripts/bootstrap-gmail-auth.ts"
   },

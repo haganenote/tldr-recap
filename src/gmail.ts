@@ -44,13 +44,24 @@ async function ensureLabelId(name: string): Promise<string> {
   return created.data.id;
 }
 
-/** Find unread messages under the raw label received in the last 24h. */
-export async function fetchRecentRawMessages(): Promise<RawMessage[]> {
+/**
+ * Find messages under the raw label to process.
+ * Normally: unread + received in the last 24h (daily automated run).
+ * With `force`: any message still under the raw label, regardless of read
+ * state or age — used for on-demand manual runs. Already-processed messages
+ * are still safe to include here since markMessageProcessed() strips the raw
+ * label from them, and index.ts double-checks against the SQLite state.
+ */
+export async function fetchRecentRawMessages(
+  opts: { force?: boolean } = {},
+): Promise<RawMessage[]> {
   const rawLabelId = await ensureLabelId(config.labels.raw);
   // Ensure processed label also exists (we need its id later).
   await ensureLabelId(config.labels.processed);
 
-  const query = `label:${config.labels.raw} is:unread newer_than:1d`;
+  const query = opts.force
+    ? `label:${config.labels.raw}`
+    : `label:${config.labels.raw} is:unread newer_than:1d`;
   const list = await gmail.users.messages.list({
     userId: "me",
     q: query,

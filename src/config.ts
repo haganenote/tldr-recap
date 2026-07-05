@@ -35,4 +35,6 @@ export const config = {
     10,
   ),
   tz: optional("TZ", "Europe/Madrid"),
+  /** Manual/on-demand run: ignore is:unread + newer_than:1d, fetch anything under the raw label. */
+  force: process.argv.includes("--force") || optional("FORCE_FETCH", "") === "1",
 } as const;
