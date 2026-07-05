@@ -63,8 +63,21 @@ Output JSON only, no markdown fences, with this shape:
 
 Do not invent items. Do not drop items. The output array must have the same length as the input array.`;
 
+class TruncationError extends Error {
+  constructor() {
+    super("OpenRouter truncated output (finish_reason=length)");
+    this.name = "TruncationError";
+  }
+}
+
 const BATCH_SIZE = 75;
 const TIMEOUT_MS = 120_000;
+// Haiku 4.5's output ceiling is 64K tokens; 16K was too tight for dense
+// batches and caused frequent finish_reason=length truncation.
+const MAX_TOKENS = 32_000;
+// Below this, a truncating batch isn't "too big" — something else is wrong
+// (e.g. a single malformed item) — stop splitting and let the error surface.
+const MIN_SPLITTABLE_BATCH = 6;
 
 function httpsPost(url: string, headers: Record<string, string>, body: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -96,7 +109,7 @@ async function callOpenRouter(
       { role: "user", content: JSON.stringify({ items: batchItems }) },
     ],
     temperature: 0.2,
-    max_tokens: 16384,
+    max_tokens: MAX_TOKENS,
   });
 
   const rawText = await httpsPost(
@@ -128,7 +141,7 @@ async function callOpenRouter(
 
   const finishReason = choice?.finish_reason ?? "unknown";
   if (finishReason === "length") {
-    throw new Error(`OpenRouter truncated output (finish_reason=length)`);
+    throw new TruncationError();
   }
 
   let parsed: { items?: Array<Partial<CategorizedItem> & { id?: string }> };
@@ -146,6 +159,42 @@ async function callOpenRouter(
   }
 
   return parsed.items ?? [];
+}
+
+type LlmInputItem = {
+  id: string;
+  headline: string;
+  raw_summary: string;
+  url: string;
+  source_section: string;
+};
+
+/**
+ * Resolves one batch, recovering from truncation by splitting the batch in
+ * half and retrying the halves — a batch that's too dense to summarize
+ * within the token budget needs to shrink, not repeat identically.
+ */
+async function resolveBatch(
+  batch: LlmInputItem[],
+  label: string,
+): Promise<Array<Partial<CategorizedItem> & { id?: string }>> {
+  try {
+    return await callOpenRouter(batch);
+  } catch (e) {
+    if (e instanceof TruncationError && batch.length > MIN_SPLITTABLE_BATCH) {
+      console.log(
+        `[${new Date().toISOString()}] ${label} truncated at ${batch.length} items, splitting in half…`,
+      );
+      const mid = Math.ceil(batch.length / 2);
+      const first = await resolveBatch(batch.slice(0, mid), `${label}a`);
+      await new Promise((r) => setTimeout(r, 5_000));
+      const second = await resolveBatch(batch.slice(mid), `${label}b`);
+      return [...first, ...second];
+    }
+    console.log(`[${new Date().toISOString()}] ${label} failed (${(e as Error).message}), retrying in 15s…`);
+    await new Promise((r) => setTimeout(r, 15_000));
+    return await callOpenRouter(batch); // let a second failure propagate
+  }
 }
 
 export async function summarizeAndCategorize(
@@ -168,14 +217,7 @@ export async function summarizeAndCategorize(
     const totalBatches = Math.ceil(llmInput.length / BATCH_SIZE);
     console.log(`[${new Date().toISOString()}] summarizing batch ${batchNum}/${totalBatches} (${batch.length} items)`);
     if (i > 0) await new Promise((r) => setTimeout(r, 10_000)); // 10s between batches to avoid rate limits
-    let rawItems: Awaited<ReturnType<typeof callOpenRouter>>;
-    try {
-      rawItems = await callOpenRouter(batch);
-    } catch (e) {
-      console.log(`[${new Date().toISOString()}] batch ${batchNum} failed (${(e as Error).message}), retrying in 15s…`);
-      await new Promise((r) => setTimeout(r, 15_000));
-      rawItems = await callOpenRouter(batch); // let second failure propagate
-    }
+    const rawItems = await resolveBatch(batch, `batch ${batchNum}/${totalBatches}`);
     for (const raw of rawItems) {
       if (!raw.headline || !raw.summary || !raw.url || !raw.category) continue;
       if (!CATEGORIES.includes(raw.category as Category)) {
