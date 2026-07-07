@@ -21,9 +21,9 @@ export const config = {
     refreshToken: required("GMAIL_REFRESH_TOKEN"),
     user: required("GMAIL_USER"),
   },
-  openrouter: {
-    apiKey: required("OPENROUTER_API_KEY"),
-    model: optional("OPENROUTER_MODEL", "anthropic/claude-haiku-4.5"),
+  anthropic: {
+    apiKey: required("ANTHROPIC_API_KEY"),
+    model: optional("ANTHROPIC_MODEL", "claude-haiku-4-5"),
   },
   recipient: required("RECAP_RECIPIENT"),
   labels: {

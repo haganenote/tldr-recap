@@ -1,7 +1,7 @@
 // src/summarize.ts
-// Calls OpenRouter in batches of 25 items.
+// Calls the Anthropic API directly in batches of 75 items.
 
-import https from "node:https";
+import Anthropic from "@anthropic-ai/sdk";
 import { jsonrepair } from "jsonrepair";
 import { config } from "./config";
 import type { CleanItem } from "./filter";
@@ -65,106 +65,46 @@ Do not invent items. Do not drop items. The output array must have the same leng
 
 class TruncationError extends Error {
   constructor() {
-    super("OpenRouter truncated output (finish_reason=length)");
+    super("Anthropic API truncated output (stop_reason=max_tokens)");
     this.name = "TruncationError";
   }
 }
 
 const BATCH_SIZE = 75;
-const TIMEOUT_MS = 120_000;
 // Haiku 4.5's output ceiling is 64K tokens; 16K was too tight for dense
-// batches and caused frequent finish_reason=length truncation.
+// batches and caused frequent truncation.
 const MAX_TOKENS = 32_000;
 // Below this, a truncating batch isn't "too big" — something else is wrong
 // (e.g. a single malformed item) — stop splitting and let the error surface.
 const MIN_SPLITTABLE_BATCH = 6;
 
-function httpsPost(url: string, headers: Record<string, string>, body: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const u = new URL(url);
-    const req = https.request(
-      { hostname: u.hostname, path: u.pathname, method: "POST", headers },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(deadline);
-          resolve(Buffer.concat(chunks).toString("utf8"));
-        });
-        res.on("error", (e) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(deadline);
-          reject(e);
-        });
-      },
-    );
-    // Hard wall-clock deadline, independent of socket state: covers DNS
-    // resolution, TCP connect, and slow-trickle responses that keep resetting
-    // an idle-based timeout without ever finishing. A stuck request used to
-    // hang indefinitely (observed: 1h+) racking up nothing but time.
-    const deadline = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      req.destroy(new Error(`OpenRouter request timed out after ${TIMEOUT_MS / 1000}s`));
-      reject(new Error(`OpenRouter request timed out after ${TIMEOUT_MS / 1000}s`));
-    }, TIMEOUT_MS);
-    req.on("error", (e) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(deadline);
-      reject(e);
-    });
-    req.write(body);
-    req.end();
-  });
-}
+const client = new Anthropic({ apiKey: config.anthropic.apiKey });
 
-async function callOpenRouter(
-  batchItems: Array<{ id: string; headline: string; raw_summary: string; url: string; source_section: string }>,
+type LlmInputItem = {
+  id: string;
+  headline: string;
+  raw_summary: string;
+  url: string;
+  source_section: string;
+};
+
+async function callAnthropic(
+  batchItems: LlmInputItem[],
 ): Promise<Array<Partial<CategorizedItem> & { id?: string }>> {
-  const body = JSON.stringify({
-    model: config.openrouter.model,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: JSON.stringify({ items: batchItems }) },
-    ],
-    temperature: 0.2,
+  const stream = client.messages.stream({
+    model: config.anthropic.model,
     max_tokens: MAX_TOKENS,
+    temperature: 0.2,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: "user", content: JSON.stringify({ items: batchItems }) }],
   });
+  const message = await stream.finalMessage();
 
-  const rawText = await httpsPost(
-    "https://openrouter.ai/api/v1/chat/completions",
-    {
-      "Content-Type": "application/json",
-      "Content-Length": String(Buffer.byteLength(body)),
-      Authorization: `Bearer ${config.openrouter.apiKey}`,
-      "HTTP-Referer": "https://github.com/tldr-recap",
-      "X-Title": "tldr-recap",
-    },
-    body,
-  );
+  const textBlock = message.content.find((b) => b.type === "text");
+  const content = textBlock?.type === "text" ? textBlock.text : undefined;
+  if (!content) throw new Error("Anthropic API returned no content");
 
-  let envelope: { choices?: Array<{ message?: { content?: string }; finish_reason?: string }> };
-  try {
-    envelope = JSON.parse(rawText);
-  } catch {
-    throw new Error(`OpenRouter response not JSON: ${rawText.slice(0, 300)}`);
-  }
-
-  if (!envelope.choices?.length) {
-    throw new Error(`OpenRouter returned no choices: ${rawText.slice(0, 300)}`);
-  }
-
-  const choice = envelope.choices[0];
-  const content = choice?.message?.content;
-  if (!content) throw new Error("OpenRouter returned no content");
-
-  const finishReason = choice?.finish_reason ?? "unknown";
-  if (finishReason === "length") {
+  if (message.stop_reason === "max_tokens") {
     throw new TruncationError();
   }
 
@@ -177,21 +117,13 @@ async function callOpenRouter(
     parsed = JSON.parse(jsonrepair(trimmed.slice(start, end + 1)));
   } catch (parseErr) {
     throw new Error(
-      `OpenRouter returned non-JSON (finish_reason=${finishReason}, parse=${(parseErr as Error).message}): ` +
+      `Anthropic API returned non-JSON (stop_reason=${message.stop_reason}, parse=${(parseErr as Error).message}): ` +
       `START=${content.slice(0, 200)} … END=${content.slice(-200)}`,
     );
   }
 
   return parsed.items ?? [];
 }
-
-type LlmInputItem = {
-  id: string;
-  headline: string;
-  raw_summary: string;
-  url: string;
-  source_section: string;
-};
 
 /**
  * Resolves one batch, recovering from truncation by splitting the batch in
@@ -203,7 +135,7 @@ async function resolveBatch(
   label: string,
 ): Promise<Array<Partial<CategorizedItem> & { id?: string }>> {
   try {
-    return await callOpenRouter(batch);
+    return await callAnthropic(batch);
   } catch (e) {
     if (e instanceof TruncationError && batch.length > MIN_SPLITTABLE_BATCH) {
       console.log(
@@ -217,7 +149,7 @@ async function resolveBatch(
     }
     console.log(`[${new Date().toISOString()}] ${label} failed (${(e as Error).message}), retrying in 15s…`);
     await new Promise((r) => setTimeout(r, 15_000));
-    return await callOpenRouter(batch); // let a second failure propagate
+    return await callAnthropic(batch); // let a second failure propagate
   }
 }
 

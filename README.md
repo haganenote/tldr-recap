@@ -79,8 +79,8 @@ GMAIL_CLIENT_SECRET=...       # from oauth-client.json
 GMAIL_REFRESH_TOKEN=...       # from bootstrap step
 GMAIL_USER=marco@example.com  # your gmail address (for sending)
 
-OPENROUTER_API_KEY=sk-or-v1-...
-OPENROUTER_MODEL=anthropic/claude-haiku-4.5  # or whatever you prefer
+ANTHROPIC_API_KEY=sk-ant-...
+ANTHROPIC_MODEL=claude-haiku-4-5  # or whatever you prefer
 
 RECAP_RECIPIENT=marco@example.com  # usually same as GMAIL_USER
 TZ=Europe/Madrid
@@ -174,11 +174,11 @@ systemctl list-timers tldr-recap.timer  # verify next run
 
 - **Spotted an ad that slipped through?** Add the destination domain to `data/sponsor-domains.txt` (one per line). Picked up next run, no redeploy.
 - **TLDR added a new section?** The parser is permissive about section names — anything in ALL CAPS followed by a blank line counts. Should just work.
-- **Want to switch models?** Change `OPENROUTER_MODEL` in `.env` and restart. Try `google/gemini-flash-1.5` or `meta-llama/llama-3.3-70b-instruct` for variety.
+- **Want to switch models?** Change `ANTHROPIC_MODEL` in `.env` and restart (e.g. `claude-sonnet-5` for higher quality at higher cost).
 
 ## Cost
 
-At ~50 items/day across all TLDR editions, batched into one OpenRouter call:
+At ~50 items/day across all TLDR editions, batched into one Anthropic API call:
 - Input: ~8k tokens
 - Output: ~2k tokens
 - Daily cost (Haiku 4.5): roughly €0.01

@@ -78,15 +78,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  // 5. Summarize + categorize via OpenRouter
+  // 5. Summarize + categorize via the Anthropic API
   let categorized: CategorizedItem[];
   try {
     categorized = await summarizeAndCategorize(cleaned);
-    log(`categorized ${categorized.length} items via OpenRouter`);
+    log(`categorized ${categorized.length} items via Anthropic API`);
   } catch (e) {
     // Fail loud — error email path. Don't try to send a degraded recap;
     // user explicitly chose error-email failure mode.
-    throw new Error(`OpenRouter failure: ${(e as Error).message}`);
+    throw new Error(`Anthropic API failure: ${(e as Error).message}`);
   }
 
   // 6. Render + send
