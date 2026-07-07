@@ -81,19 +81,43 @@ const MIN_SPLITTABLE_BATCH = 6;
 
 function httpsPost(url: string, headers: Record<string, string>, body: string): Promise<string> {
   return new Promise((resolve, reject) => {
+    let settled = false;
     const u = new URL(url);
     const req = https.request(
       { hostname: u.hostname, path: u.pathname, method: "POST", headers },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-        res.on("error", reject);
+        res.on("end", () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(deadline);
+          resolve(Buffer.concat(chunks).toString("utf8"));
+        });
+        res.on("error", (e) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(deadline);
+          reject(e);
+        });
       },
     );
-    // Socket-level timeout: fires at the OS level regardless of JS event loop state.
-    req.setTimeout(TIMEOUT_MS, () => req.destroy(new Error(`OpenRouter request timed out after ${TIMEOUT_MS / 1000}s`)));
-    req.on("error", reject);
+    // Hard wall-clock deadline, independent of socket state: covers DNS
+    // resolution, TCP connect, and slow-trickle responses that keep resetting
+    // an idle-based timeout without ever finishing. A stuck request used to
+    // hang indefinitely (observed: 1h+) racking up nothing but time.
+    const deadline = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      req.destroy(new Error(`OpenRouter request timed out after ${TIMEOUT_MS / 1000}s`));
+      reject(new Error(`OpenRouter request timed out after ${TIMEOUT_MS / 1000}s`));
+    }, TIMEOUT_MS);
+    req.on("error", (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      reject(e);
+    });
     req.write(body);
     req.end();
   });
