@@ -13,7 +13,7 @@ EnvironmentFile=/opt/tldr-recap/.env
 ExecStart=/home/marco/.bun/bin/bun run src/index.ts
 StandardOutput=journal
 StandardError=journal
-TimeoutStartSec=300
+TimeoutStartSec=1800
 
 # Hardening
 NoNewPrivileges=true
