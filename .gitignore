@@ -5,3 +5,4 @@ data/
 .bun/
 dist/
 oauth-client.json
+.aider*

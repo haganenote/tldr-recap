@@ -74,6 +74,10 @@ const BATCH_SIZE = 75;
 // Haiku 4.5's output ceiling is 64K tokens; 16K was too tight for dense
 // batches and caused frequent truncation.
 const MAX_TOKENS = 32_000;
+// Hard abort per API call. Healthy 75-item batches stream in ~2.5-3.5 min;
+// anything past 5 min is a hung connection, not a slow batch. Without this,
+// one stuck stream blocks until systemd's TimeoutStartSec kills the whole run.
+const CALL_TIMEOUT_MS = 300_000;
 // Below this, a truncating batch isn't "too big" — something else is wrong
 // (e.g. a single malformed item) — stop splitting and let the error surface.
 const MIN_SPLITTABLE_BATCH = 6;
@@ -98,7 +102,18 @@ async function callAnthropic(
     system: SYSTEM_PROMPT,
     messages: [{ role: "user", content: JSON.stringify({ items: batchItems }) }],
   });
-  const message = await stream.finalMessage();
+  const timer = setTimeout(() => stream.controller.abort(), CALL_TIMEOUT_MS);
+  let message: Anthropic.Message;
+  try {
+    message = await stream.finalMessage();
+  } catch (e) {
+    if (stream.controller.signal.aborted) {
+      throw new Error(`Anthropic call timed out after ${CALL_TIMEOUT_MS / 1000}s (aborted)`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const textBlock = message.content.find((b) => b.type === "text");
   const content = textBlock?.type === "text" ? textBlock.text : undefined;
